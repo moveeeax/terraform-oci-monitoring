@@ -11,6 +11,10 @@ module "alarm" {
   destinations   = [var.topic_id]
   body           = "CPU utilization has exceeded 80% for 5 minutes."
 
+  # Without this, OCI notifies once per state change only. Re-notify hourly for
+  # as long as the alarm keeps firing.
+  repeat_notification_duration = "PT1H"
+
   freeform_tags = {
     Environment = "sandbox"
     ManagedBy   = "terraform"
