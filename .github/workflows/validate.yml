@@ -24,6 +24,11 @@ jobs:
       - name: validate
         run: tofu validate
 
+      # mock_provider requires OpenTofu/Terraform >= 1.7; the module itself only
+      # needs >= 1.5, so this is a test-time requirement, not a consumer one.
+      - name: test
+        run: tofu test
+
       - name: validate example
         working-directory: examples/basic
         run: |
