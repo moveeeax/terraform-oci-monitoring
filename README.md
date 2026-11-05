@@ -9,7 +9,7 @@ condition holds for the pending duration.
 
 ```hcl
 module "alarm" {
-  source = "github.com/moveeeax/terraform-oci-monitoring"
+  source = "github.com/moveeeax/terraform-oci-monitoring?ref=v1.0.0"
 
   compartment_id = var.compartment_id
   display_name   = "prod-high-cpu"
