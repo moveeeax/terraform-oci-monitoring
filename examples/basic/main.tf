@@ -8,8 +8,19 @@ module "alarm" {
   namespace      = "oci_computeagent"
   query          = "CpuUtilization[1m].mean() > 80"
   severity       = "WARNING"
-  destinations   = [var.topic_id]
   body           = "CPU utilization has exceeded 80% for 5 minutes."
+
+  # The module creates the topic and points the alarm at it. To use an
+  # existing topic instead, drop this block and pass destinations = [topic_ocid].
+  notification = {
+    topic_name = "example-alerts"
+    subscriptions = {
+      oncall = {
+        protocol = "EMAIL"
+        endpoint = var.alert_email # the recipient must confirm the subscription
+      }
+    }
+  }
 
   # Without this, OCI notifies once per state change only. Re-notify hourly for
   # as long as the alarm keeps firing.
@@ -26,11 +37,15 @@ variable "compartment_id" {
   type        = string
 }
 
-variable "topic_id" {
-  description = "OCID of the ONS topic notified when the alarm fires."
+variable "alert_email" {
+  description = "Email address subscribed to the alarm's notification topic."
   type        = string
 }
 
 output "alarm_id" {
   value = module.alarm.id
+}
+
+output "topic_id" {
+  value = module.alarm.topic_id
 }
