@@ -82,6 +82,9 @@ run "optional_notification_settings_pass_through" {
   }
 }
 
+# With no notification topic either, the alarm would notify nobody; the
+# precondition on the alarm catches it (destinations may be empty only when the
+# module creates the topic).
 run "rejects_empty_destinations" {
   command = plan
 
@@ -89,7 +92,7 @@ run "rejects_empty_destinations" {
     destinations = []
   }
 
-  expect_failures = [var.destinations]
+  expect_failures = [oci_monitoring_alarm.this]
 }
 
 run "rejects_non_ocid_destination" {
@@ -140,4 +143,176 @@ run "rejects_invalid_repeat_notification_duration" {
   }
 
   expect_failures = [var.repeat_notification_duration]
+}
+
+run "no_topic_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(oci_ons_notification_topic.this) == 0 && length(oci_ons_subscription.this) == 0
+    error_message = "No topic or subscription may be created unless notification is set."
+  }
+
+  assert {
+    condition     = output.topic_id == null
+    error_message = "topic_id must be null when the module creates no topic."
+  }
+
+  assert {
+    condition     = oci_monitoring_alarm.this.destinations == tolist(["ocid1.onstopic.oc1..aaaaaaaatopic"])
+    error_message = "Without notification, the alarm destinations must be exactly var.destinations."
+  }
+}
+
+run "creates_topic_and_subscriptions" {
+  command = apply
+
+  variables {
+    destinations = []
+    notification = {
+      topic_name  = "prod-alerts"
+      description = "Production alarms"
+      subscriptions = {
+        oncall = { protocol = "EMAIL", endpoint = "oncall@example.com" }
+        slack  = { protocol = "SLACK", endpoint = "https://hooks.slack.com/services/T000/B000/XXXX" }
+        pager  = { protocol = "PAGERDUTY", endpoint = "https://events.pagerduty.com/integration/abc123/enqueue" }
+      }
+    }
+    freeform_tags = { Environment = "test" }
+  }
+
+  assert {
+    condition     = oci_ons_notification_topic.this[0].name == "prod-alerts" && oci_ons_notification_topic.this[0].compartment_id == var.compartment_id
+    error_message = "The topic must be created with topic_name in the alarm's compartment."
+  }
+
+  assert {
+    condition     = oci_ons_notification_topic.this[0].freeform_tags["Environment"] == "test"
+    error_message = "freeform_tags must be applied to the topic."
+  }
+
+  assert {
+    condition     = length(oci_ons_subscription.this) == 3
+    error_message = "One subscription per notification.subscriptions entry must be created."
+  }
+
+  assert {
+    condition     = oci_ons_subscription.this["oncall"].protocol == "EMAIL" && oci_ons_subscription.this["oncall"].endpoint == "oncall@example.com"
+    error_message = "Subscription protocol and endpoint must be passed through."
+  }
+
+  assert {
+    condition     = alltrue([for s in oci_ons_subscription.this : s.topic_id == oci_ons_notification_topic.this[0].id])
+    error_message = "Every subscription must attach to the created topic."
+  }
+
+  assert {
+    condition     = oci_monitoring_alarm.this.destinations == tolist([oci_ons_notification_topic.this[0].id])
+    error_message = "The created topic must be the alarm's destination."
+  }
+
+  assert {
+    condition     = output.topic_id == oci_ons_notification_topic.this[0].id && length(output.subscription_ids) == 3
+    error_message = "topic_id and subscription_ids outputs must expose the created resources."
+  }
+}
+
+run "topic_is_appended_to_a_stream_destination" {
+  command = apply
+
+  variables {
+    destinations = ["ocid1.stream.oc1..aaaaaaaastream"]
+    notification = {
+      topic_name     = "prod-alerts"
+      compartment_id = "ocid1.compartment.oc1..aaaaaaaaalerts"
+    }
+  }
+
+  assert {
+    condition     = oci_monitoring_alarm.this.destinations == tolist(["ocid1.stream.oc1..aaaaaaaastream", oci_ons_notification_topic.this[0].id])
+    error_message = "The created topic must be appended after the caller's destinations."
+  }
+
+  assert {
+    condition     = oci_ons_notification_topic.this[0].compartment_id == "ocid1.compartment.oc1..aaaaaaaaalerts"
+    error_message = "notification.compartment_id must override the topic compartment."
+  }
+
+  assert {
+    condition     = length(oci_ons_subscription.this) == 0
+    error_message = "A topic without subscriptions must be allowed."
+  }
+}
+
+run "rejects_second_topic_with_notification" {
+  command = plan
+
+  variables {
+    notification = { topic_name = "prod-alerts" }
+  }
+
+  expect_failures = [oci_monitoring_alarm.this]
+}
+
+run "rejects_two_topic_destinations" {
+  command = plan
+
+  variables {
+    destinations = ["ocid1.onstopic.oc1..aaaaaaaaone", "ocid1.onstopic.oc1..aaaaaaaatwo"]
+  }
+
+  expect_failures = [oci_monitoring_alarm.this]
+}
+
+run "rejects_unknown_subscription_protocol" {
+  command = plan
+
+  variables {
+    destinations = []
+    notification = {
+      topic_name    = "prod-alerts"
+      subscriptions = { teams = { protocol = "TEAMS", endpoint = "https://example.com/hook" } }
+    }
+  }
+
+  expect_failures = [var.notification]
+}
+
+run "rejects_email_endpoint_that_is_not_an_address" {
+  command = plan
+
+  variables {
+    destinations = []
+    notification = {
+      topic_name    = "prod-alerts"
+      subscriptions = { oncall = { protocol = "EMAIL", endpoint = "oncall" } }
+    }
+  }
+
+  expect_failures = [var.notification]
+}
+
+run "rejects_slack_endpoint_that_is_not_a_url" {
+  command = plan
+
+  variables {
+    destinations = []
+    notification = {
+      topic_name    = "prod-alerts"
+      subscriptions = { slack = { protocol = "SLACK", endpoint = "#alerts" } }
+    }
+  }
+
+  expect_failures = [var.notification]
+}
+
+run "rejects_empty_topic_name" {
+  command = plan
+
+  variables {
+    destinations = []
+    notification = { topic_name = "" }
+  }
+
+  expect_failures = [var.notification]
 }

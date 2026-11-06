@@ -47,17 +47,71 @@ variable "severity" {
 }
 
 variable "destinations" {
-  description = "List of destination OCIDs (typically ONS topics) to notify when the alarm fires."
+  description = <<-EOT
+    List of destination OCIDs (ONS topics or streams) to notify when the alarm fires.
+    OCI allows one destination per service. May be left empty when notification is
+    set, since the topic the module creates is added to the alarm's destinations.
+  EOT
   type        = list(string)
-
-  validation {
-    condition     = length(var.destinations) > 0
-    error_message = "At least one destination OCID must be provided; an alarm with no destinations notifies nobody."
-  }
+  default     = []
+  nullable    = false
 
   validation {
     condition     = alltrue([for d in var.destinations : can(regex("^ocid1\\.[a-z0-9]+\\.", d))])
     error_message = "Every destination must be an OCID (e.g. ocid1.onstopic.oc1..aaaa). Empty or malformed entries produce an alarm that notifies nobody."
+  }
+}
+
+variable "notification" {
+  description = <<-EOT
+    Optional Notifications (ONS) topic to create for the alarm, with its
+    subscriptions. The topic OCID is appended to destinations. topic_name must be
+    unique in the tenancy. compartment_id defaults to the alarm's compartment.
+    subscriptions is keyed by any stable name; protocol is one of CUSTOM_HTTPS,
+    EMAIL, HTTPS, ORACLE_FUNCTIONS, PAGERDUTY, SLACK or SMS, and endpoint is the
+    matching email address, URL, function OCID or phone number. EMAIL
+    subscriptions stay pending until the recipient confirms them.
+  EOT
+  type = object({
+    topic_name     = string
+    description    = optional(string)
+    compartment_id = optional(string)
+    subscriptions = optional(map(object({
+      protocol = string
+      endpoint = string
+    })), {})
+  })
+  default = null
+
+  validation {
+    condition     = var.notification == null || try(trimspace(var.notification.topic_name) != "", false)
+    error_message = "notification.topic_name must be a non-empty string."
+  }
+
+  validation {
+    condition     = var.notification == null || try(var.notification.compartment_id == null || can(regex("^ocid1\\.(compartment|tenancy)\\.", var.notification.compartment_id)), false)
+    error_message = "notification.compartment_id must be a compartment OCID (or the tenancy OCID for the root compartment), or null."
+  }
+
+  validation {
+    condition = var.notification == null || alltrue([
+      for s in try(values(var.notification.subscriptions), []) :
+      contains(["CUSTOM_HTTPS", "EMAIL", "HTTPS", "ORACLE_FUNCTIONS", "PAGERDUTY", "SLACK", "SMS"], s.protocol)
+    ])
+    error_message = "Each subscription protocol must be CUSTOM_HTTPS, EMAIL, HTTPS, ORACLE_FUNCTIONS, PAGERDUTY, SLACK or SMS."
+  }
+
+  validation {
+    condition = var.notification == null || alltrue([
+      for s in try(values(var.notification.subscriptions), []) :
+      try(trimspace(s.endpoint) != "" && (
+        s.protocol == "EMAIL" ? can(regex("^[^@\\s]+@[^@\\s]+$", s.endpoint)) :
+        contains(["CUSTOM_HTTPS", "HTTPS", "PAGERDUTY", "SLACK"], s.protocol) ? can(regex("^https?://", s.endpoint)) && length(s.endpoint) <= 512 :
+        s.protocol == "ORACLE_FUNCTIONS" ? startswith(s.endpoint, "ocid1.fnfunc.") :
+        true
+      ), false)
+    ])
+    error_message = "Each subscription endpoint must match its protocol: an email address for EMAIL, an http(s):// URL of at most 512 characters for CUSTOM_HTTPS, HTTPS, PAGERDUTY and SLACK, a function OCID (ocid1.fnfunc.) for ORACLE_FUNCTIONS, and a non-empty value for SMS."
   }
 }
 
@@ -101,13 +155,13 @@ variable "body" {
 }
 
 variable "freeform_tags" {
-  description = "Free-form tags applied to the alarm."
+  description = "Free-form tags applied to the alarm and, when notification is set, to the topic and its subscriptions."
   type        = map(string)
   default     = {}
 }
 
 variable "defined_tags" {
-  description = "Defined tags applied to the alarm, keyed as \"namespace.key\"."
+  description = "Defined tags applied to the alarm and, when notification is set, to the topic and its subscriptions, keyed as \"namespace.key\"."
   type        = map(string)
   default     = {}
 }
